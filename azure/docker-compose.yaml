@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: mcr.microsoft.com/azurelinux/base/prometheus:3.9.1-1-azl3.0.20260204
+    image: mcr.microsoft.com/azurelinux/base/prometheus:3.10.0-2-azl3.0.20260401
     container_name: prometheus
     ports:
       - "9090:9090"
