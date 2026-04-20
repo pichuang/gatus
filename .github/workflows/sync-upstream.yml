@@ -1,0 +1,162 @@
+name: sync-upstream
+on:
+  schedule:
+    # Run daily at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: pichuang
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/TwiN/gatus.git
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          COMMIT_COUNT=$(git rev-list pichuang..upstream/master --count)
+          echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            echo "No new upstream commits. Nothing to do."
+          else
+            echo "Found $COMMIT_COUNT new upstream commit(s)."
+            {
+              echo "commits<<EOF"
+              git log pichuang..upstream/master --oneline --no-merges | head -50
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            UPSTREAM_SHA=$(git rev-parse --short upstream/master)
+            echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing sync PR
+        if: steps.check.outputs.commit_count != '0'
+        id: existing_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OPEN_PRS=$(gh pr list --label "upstream-sync" --state open --json number --jq 'length')
+          echo "open_prs=$OPEN_PRS" >> "$GITHUB_OUTPUT"
+          if [ "$OPEN_PRS" -gt 0 ]; then
+            echo "An upstream-sync PR already exists. Skipping."
+          fi
+
+      - name: Attempt merge
+        if: steps.check.outputs.commit_count != '0' && steps.existing_pr.outputs.open_prs == '0'
+        id: merge
+        run: |
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d)"
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+
+          git checkout -b "$BRANCH_NAME" pichuang
+          if git merge upstream/master --no-edit; then
+            echo "merge_success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge_success=false" >> "$GITHUB_OUTPUT"
+            git merge --abort
+
+            # Collect conflicting files for the issue
+            git merge upstream/master --no-commit --no-ff 2>/dev/null || true
+            {
+              echo "conflict_files<<EOF"
+              git diff --name-only --diff-filter=U
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
+
+      - name: Push branch and create PR
+        if: steps.merge.outputs.merge_success == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin "${{ steps.merge.outputs.branch_name }}"
+          gh pr create \
+            --title "sync: upstream TwiN/gatus @ ${{ steps.check.outputs.upstream_sha }}" \
+            --body "## Upstream Sync
+
+          Merging **${{ steps.check.outputs.commit_count }}** new commit(s) from [TwiN/gatus](https://github.com/TwiN/gatus) \`master\`.
+
+          ### New upstream commits
+
+          \`\`\`
+          ${{ steps.check.outputs.commits }}
+          \`\`\`
+
+          ### Checklist
+
+          - [ ] Review upstream changes for breaking modifications
+          - [ ] Verify no conflicts with custom code (\`// CUSTOM: pichuang\` markers)
+          - [ ] CI tests pass
+          - [ ] Run \`go mod tidy && go mod vendor\` if dependencies changed
+          - [ ] Run \`make frontend-build\` if \`web/app/\` changed
+          " \
+            --label "upstream-sync" \
+            --base pichuang \
+            --head "${{ steps.merge.outputs.branch_name }}"
+
+      - name: Create conflict issue
+        if: steps.merge.outputs.merge_success == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "sync: upstream merge conflict @ ${{ steps.check.outputs.upstream_sha }}" \
+            --body "## Upstream Sync — Merge Conflict
+
+          Attempted to merge **${{ steps.check.outputs.commit_count }}** new commit(s) from [TwiN/gatus](https://github.com/TwiN/gatus) \`master\`, but conflicts were detected.
+
+          ### Conflicting files
+
+          \`\`\`
+          ${{ steps.merge.outputs.conflict_files }}
+          \`\`\`
+
+          ### New upstream commits
+
+          \`\`\`
+          ${{ steps.check.outputs.commits }}
+          \`\`\`
+
+          ### How to resolve
+
+          \`\`\`bash
+          # Option 1: Use the sync script
+          ./scripts/sync-upstream.sh
+
+          # Option 2: Manual steps
+          git fetch upstream master
+          git checkout -b sync/upstream-\$(date +%Y%m%d) pichuang
+          git merge upstream/master
+          # Resolve conflicts, then:
+          git add .
+          git commit
+          git push origin HEAD
+          # Create a PR to pichuang
+          \`\`\`
+
+          > Look for \`// CUSTOM: pichuang\` markers to identify custom code blocks during conflict resolution.
+          " \
+            --label "upstream-sync" \
+            --label "conflict"
