@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: 'gatus'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['gatus:8080']
+        labels:
+          instance: 'gatus'
+
+# Uncomment and configure the following section to enable remote write
+# to Azure Monitor Workspace (Prometheus-compatible endpoint).
+#
+# Prerequisites:
+#   1. Create an Azure Monitor Workspace in Azure Portal
+#   2. Create a Microsoft Entra ID app registration (or use managed identity)
+#   3. Assign "Monitoring Metrics Publisher" role to the identity
+#   4. Get the Prometheus remote write endpoint from Azure Monitor Workspace
+#
+# remote_write:
+#   - url: "https://<AZURE_MONITOR_WORKSPACE>.prometheus.monitor.azure.com/api/v1/write"
+#     azuread:
+#       cloud: "AzurePublic"
+#       managed_identity:
+#         client_id: "<MANAGED_IDENTITY_CLIENT_ID>"
+#     # Or use OAuth2 with app registration:
+#     # oauth2:
+#     #   client_id: "<APP_CLIENT_ID>"
+#     #   client_secret: "<APP_CLIENT_SECRET>"
+#     #   token_url: "https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token"
+#     #   scopes:
+#     #     - "https://monitor.azure.com/.default"

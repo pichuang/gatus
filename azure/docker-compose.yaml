@@ -1,0 +1,32 @@
+services:
+  gatus:
+    build:
+      context: ..
+      dockerfile: azure/Dockerfile-microsoft
+      args:
+        - TDNF_REPO_BASE_URL=${TDNF_REPO_BASE_URL:-}
+    container_name: gatus
+    cap_add:
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ping_group_range=0 65534
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    environment:
+      - GATUS_CONFIG_PATH=/config/config.yaml
+      - GATUS_LOG_LEVEL=INFO
+    restart: unless-stopped
+
+  prometheus:
+    image: mcr.microsoft.com/azurelinux/base/prometheus:3.9.1-1-azl3.0.20260204
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - gatus
+    restart: unless-stopped

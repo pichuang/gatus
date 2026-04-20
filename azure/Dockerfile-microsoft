@@ -1,0 +1,33 @@
+# Build the go application into a binary
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.25-azurelinux3.0 AS builder
+ARG TDNF_REPO_BASE_URL
+RUN if [ -n "$TDNF_REPO_BASE_URL" ]; then \
+      sed -i "s|https://packages.microsoft.com|${TDNF_REPO_BASE_URL}|g" /etc/yum.repos.d/*.repo; \
+    fi
+RUN tdnf install -y gcc glibc-static glibc-devel && tdnf clean all
+WORKDIR /app
+COPY . ./
+RUN go mod tidy -diff
+RUN CGO_ENABLED=1 GOOS=linux go build -a -ldflags '-linkmode external -extldflags "-static"' -o gatus .
+RUN printf 'package main\nimport("net";"os";"time")\nfunc main(){c,e:=net.DialTimeout("tcp","localhost:8080",3*time.Second);if e!=nil{os.Exit(1)};c.Close()}\n' > /tmp/healthcheck.go && \
+    CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/healthcheck /tmp/healthcheck.go
+RUN mkdir -p /tmp/data
+
+# Run Tests inside docker image if you don't have a configured go environment
+#RUN go test ./... -mod vendor
+
+# Run the binary on a distroless container (includes CA certificates and glibc)
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
+COPY --from=builder /app/gatus .
+COPY --from=builder /tmp/healthcheck /healthcheck
+COPY --from=builder /app/config.yaml ./config/config.yaml
+COPY --from=builder /usr/lib/libcrypto.so.3.3.5 /usr/lib/libcrypto.so.3
+COPY --from=builder /usr/lib/libssl.so.3.3.5 /usr/lib/libssl.so.3
+COPY --from=builder --chown=65534:65534 /tmp/data /data
+USER 65534
+ENV GATUS_CONFIG_PATH=""
+ENV GATUS_LOG_LEVEL="INFO"
+ENV PORT="8080"
+EXPOSE ${PORT}
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/healthcheck"]
+ENTRYPOINT ["/gatus"]
